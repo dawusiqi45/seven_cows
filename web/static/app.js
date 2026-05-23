@@ -1,7 +1,11 @@
 const state = {
   config: null,
-  mediaRecorder: null,
-  audioChunks: [],
+  stream: null,
+  audioContext: null,
+  sourceNode: null,
+  processorNode: null,
+  sampleRate: 0,
+  audioBuffers: [],
   recording: false,
 };
 
@@ -73,42 +77,79 @@ async function loadHistory() {
 }
 
 async function startRecording() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  state.audioChunks = [];
-  state.mediaRecorder = new MediaRecorder(stream);
-  state.mediaRecorder.addEventListener("dataavailable", (event) => {
-    if (event.data.size > 0) {
-      state.audioChunks.push(event.data);
-    }
+  if (state.recording) {
+    return;
+  }
+
+  state.stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
   });
-  state.mediaRecorder.addEventListener("stop", submitRecording);
-  state.mediaRecorder.start();
+
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  state.audioContext = new AudioContext();
+  state.sampleRate = state.audioContext.sampleRate;
+  state.audioBuffers = [];
+  state.sourceNode = state.audioContext.createMediaStreamSource(state.stream);
+  state.processorNode = state.audioContext.createScriptProcessor(4096, 1, 1);
+
+  state.processorNode.onaudioprocess = (event) => {
+    if (!state.recording) {
+      return;
+    }
+    const input = event.inputBuffer.getChannelData(0);
+    const chunk = new Float32Array(input);
+    state.audioBuffers.push(chunk);
+    updateMeter(chunk);
+  };
+
+  state.sourceNode.connect(state.processorNode);
+  state.processorNode.connect(state.audioContext.destination);
   state.recording = true;
+
   recordButton.classList.add("recording");
   recordButton.textContent = "松开识别";
   setStatus("正在录音");
-  animateMeter();
 }
 
-function stopRecording() {
-  if (!state.mediaRecorder || state.mediaRecorder.state === "inactive") {
+async function stopRecording() {
+  if (!state.recording) {
     return;
   }
-  state.mediaRecorder.stop();
-  state.mediaRecorder.stream.getTracks().forEach((track) => track.stop());
+
   state.recording = false;
   recordButton.classList.remove("recording");
   recordButton.textContent = "按住录音";
   meterBar.style.width = "0";
   setStatus("正在识别");
+
+  if (state.processorNode) {
+    state.processorNode.disconnect();
+    state.processorNode.onaudioprocess = null;
+  }
+  if (state.sourceNode) {
+    state.sourceNode.disconnect();
+  }
+  if (state.stream) {
+    state.stream.getTracks().forEach((track) => track.stop());
+  }
+  if (state.audioContext) {
+    await state.audioContext.close();
+  }
+
+  const samples = mergeBuffers(state.audioBuffers);
+  const wavBlob = encodeWav(samples, state.sampleRate, 16000);
+  await submitRecording(wavBlob);
 }
 
-async function submitRecording() {
+async function submitRecording(blob) {
   try {
-    const blob = new Blob(state.audioChunks, { type: "audio/webm" });
     const result = await api("/api/recognize", {
       method: "POST",
-      headers: { "Content-Type": blob.type },
+      headers: { "Content-Type": "audio/wav" },
       body: blob,
     });
     resultText.value = result.finalText;
@@ -141,12 +182,86 @@ async function clearHistory() {
   await loadHistory();
 }
 
-function animateMeter() {
-  if (!state.recording) {
-    return;
+function mergeBuffers(buffers) {
+  const totalLength = buffers.reduce((sum, buffer) => sum + buffer.length, 0);
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+  for (const buffer of buffers) {
+    merged.set(buffer, offset);
+    offset += buffer.length;
   }
-  meterBar.style.width = `${20 + Math.round(Math.random() * 75)}%`;
-  window.setTimeout(animateMeter, 180);
+  return merged;
+}
+
+function downsampleBuffer(buffer, inputRate, outputRate) {
+  if (outputRate === inputRate) {
+    return buffer;
+  }
+  const ratio = inputRate / outputRate;
+  const newLength = Math.round(buffer.length / ratio);
+  const result = new Float32Array(newLength);
+  let offsetResult = 0;
+  let offsetBuffer = 0;
+
+  while (offsetResult < result.length) {
+    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+    let accumulator = 0;
+    let count = 0;
+    for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i += 1) {
+      accumulator += buffer[i];
+      count += 1;
+    }
+    result[offsetResult] = accumulator / Math.max(count, 1);
+    offsetResult += 1;
+    offsetBuffer = nextOffsetBuffer;
+  }
+
+  return result;
+}
+
+function encodeWav(floatSamples, inputRate, outputRate) {
+  const samples = downsampleBuffer(floatSamples, inputRate, outputRate);
+  const dataLength = samples.length * 2;
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(view, 8, "WAVE");
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, outputRate, true);
+  view.setUint32(28, outputRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(view, 36, "data");
+  view.setUint32(40, dataLength, true);
+
+  let offset = 44;
+  for (const sample of samples) {
+    const clamped = Math.max(-1, Math.min(1, sample));
+    view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([view], { type: "audio/wav" });
+}
+
+function writeString(view, offset, value) {
+  for (let i = 0; i < value.length; i += 1) {
+    view.setUint8(offset + i, value.charCodeAt(i));
+  }
+}
+
+function updateMeter(buffer) {
+  let sum = 0;
+  for (const sample of buffer) {
+    sum += sample * sample;
+  }
+  const rms = Math.sqrt(sum / Math.max(buffer.length, 1));
+  meterBar.style.width = `${Math.min(100, Math.round(rms * 400))}%`;
 }
 
 function escapeHTML(value) {

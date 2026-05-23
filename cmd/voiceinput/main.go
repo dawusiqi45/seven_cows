@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,7 +41,12 @@ func main() {
 
 	historyStore := history.NewJSONStore(*dataDir + string(os.PathSeparator) + "history.json")
 	processor := textproc.NewProcessor(appConfig.Text)
-	recognizer := asr.NewMockRecognizer()
+	recognizer, provider, err := buildRecognizer(appConfig.ASR.Provider, logger)
+	if err != nil {
+		logger.Error("create recognizer", "error", err)
+		os.Exit(1)
+	}
+	appConfig.ASR.Provider = provider
 
 	app := server.New(server.Dependencies{
 		Config:      appConfig,
@@ -76,4 +83,56 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("server stopped")
+}
+
+func buildRecognizer(configProvider string, logger *slog.Logger) (asr.Recognizer, string, error) {
+	provider := strings.TrimSpace(os.Getenv("VOICEINPUT_ASR_PROVIDER"))
+	if provider == "" {
+		provider = strings.TrimSpace(configProvider)
+	}
+	if provider == "" || strings.EqualFold(provider, "mock") {
+		if hasTencentCredentials() {
+			provider = "tencent"
+		} else {
+			logger.Info("using mock asr provider")
+			return asr.NewMockRecognizer(), "mock", nil
+		}
+	}
+
+	switch strings.ToLower(provider) {
+	case "tencent":
+		recognizer, err := asr.NewTencentRecognizer(asr.TencentConfig{
+			SecretID:       os.Getenv("TENCENTCLOUD_SECRET_ID"),
+			SecretKey:      os.Getenv("TENCENTCLOUD_SECRET_KEY"),
+			Region:         getenvDefault("TENCENTCLOUD_REGION", "ap-shanghai"),
+			Engine:         getenvDefault("TENCENT_ASR_ENGINE", "16k_zh"),
+			VoiceFormat:    "wav",
+			FilterModal:    0,
+			ConvertNumMode: 1,
+			HotwordList:    os.Getenv("TENCENT_ASR_HOTWORDS"),
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		logger.Info("using tencent asr provider", "endpoint", "asr.tencentcloudapi.com")
+		return recognizer, "tencent", nil
+	case "mock":
+		logger.Info("using mock asr provider")
+		return asr.NewMockRecognizer(), "mock", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported asr provider: %s", provider)
+	}
+}
+
+func hasTencentCredentials() bool {
+	return strings.TrimSpace(os.Getenv("TENCENTCLOUD_SECRET_ID")) != "" &&
+		strings.TrimSpace(os.Getenv("TENCENTCLOUD_SECRET_KEY")) != ""
+}
+
+func getenvDefault(key string, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
 }

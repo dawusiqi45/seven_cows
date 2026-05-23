@@ -25,6 +25,23 @@ go run ./cmd/voiceinput
 http://127.0.0.1:8080
 ```
 
+## 腾讯云 ASR 配置
+
+默认使用 `mock` 识别器，便于无密钥时演示完整流程。接入腾讯云一句话识别时，通过环境变量启用：
+
+```powershell
+$env:VOICEINPUT_ASR_PROVIDER="tencent"
+$env:TENCENTCLOUD_SECRET_ID="your-secret-id"
+$env:TENCENTCLOUD_SECRET_KEY="your-secret-key"
+$env:TENCENTCLOUD_REGION="ap-shanghai"
+$env:TENCENT_ASR_ENGINE="16k_zh"
+go run ./cmd/voiceinput
+```
+
+密钥不要写入代码、README 或提交记录。本项目只提交 `.env.example`，真实 `.env` 已在 `.gitignore` 中排除。
+
+前端会把浏览器麦克风音频编码成 16kHz 单声道 WAV 后提交给 Go 后端，后端再调用腾讯云 ASR。
+
 ## 测试
 
 ```bash
@@ -46,15 +63,15 @@ docs                 需求与计划文档
 
 ## 第三方依赖
 
-当前版本仅使用 Go 标准库，没有引入第三方库或框架。
+当前版本仅使用 Go 标准库，没有引入第三方库或框架。腾讯云 ASR 通过 HTTP API 和 TC3-HMAC-SHA256 签名直接调用，未引入腾讯云 SDK。
 
 ## 原创功能部分
 
 - Go 后端服务与 API 路由。
-- ASR 抽象接口和 mock 识别器。
+- ASR 抽象接口、mock 识别器、腾讯云 ASR 适配器。
 - 文本清洗、口令转换、自动标点处理。
 - 本地 JSON 配置与历史记录。
-- Web 录音控制台。
+- Web 录音控制台和浏览器端 WAV 编码。
 
 ## 后续扩展
 
