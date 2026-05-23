@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"github.com/dawusiqi45/seven_cows/internal/config"
 	"github.com/dawusiqi45/seven_cows/internal/history"
 	"github.com/dawusiqi45/seven_cows/internal/textproc"
+	"go.uber.org/zap"
 )
 
 type ConfigStore interface {
@@ -30,7 +30,7 @@ type Dependencies struct {
 	Processor   *textproc.Processor
 	Recognizer  asr.Recognizer
 	StaticDir   string
-	Logger      *slog.Logger
+	Logger      *zap.Logger
 }
 
 type App struct {
@@ -40,7 +40,7 @@ type App struct {
 	processor   *textproc.Processor
 	recognizer  asr.Recognizer
 	staticDir   string
-	logger      *slog.Logger
+	logger      *zap.Logger
 }
 
 func New(deps Dependencies) *App {
@@ -63,7 +63,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/history", a.handleHistory)
 	mux.HandleFunc("/api/process", a.handleProcess)
 	mux.HandleFunc("/api/recognize", a.handleRecognize)
-	return withJSONErrors(mux, a.logger)
+	return withRequestLogging(withJSONErrors(mux, a.logger), a.logger)
 }
 
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -94,9 +94,16 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 		a.config = next
 		a.processor.UpdateConfig(next.Text)
 		if err := a.configStore.Save(next); err != nil {
+			a.logger.Error("save config failed", zap.Error(err))
 			http.Error(w, "save config failed", http.StatusInternalServerError)
 			return
 		}
+		a.logger.Info("config updated",
+			zap.String("asr_provider", next.ASR.Provider),
+			zap.Bool("auto_punctuation", next.Text.AutoPunctuation),
+			zap.Bool("remove_fillers", next.Text.RemoveFillers),
+			zap.Bool("enable_commands", next.Text.EnableCommands),
+		)
 		writeJSON(w, http.StatusOK, next)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -114,9 +121,11 @@ func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, entries)
 	case http.MethodDelete:
 		if err := a.history.Clear(); err != nil {
+			a.logger.Error("clear history failed", zap.Error(err))
 			http.Error(w, "clear history failed", http.StatusInternalServerError)
 			return
 		}
+		a.logger.Info("history cleared")
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -150,15 +159,30 @@ func (a *App) handleRecognize(w http.ResponseWriter, r *http.Request) {
 
 	audio, err := readAllLimited(r, 10<<20)
 	if err != nil {
+		a.logger.Warn("read audio failed", zap.Error(err), zap.String("content_type", r.Header.Get("Content-Type")))
 		http.Error(w, "read audio failed", http.StatusBadRequest)
 		return
 	}
 
+	started := time.Now()
 	result, err := a.recognizer.Recognize(r.Context(), audio, r.Header.Get("Content-Type"))
 	if err != nil {
+		a.logger.Warn("recognition failed",
+			zap.Duration("duration", time.Since(started)),
+			zap.Int("audio_bytes", len(audio)),
+			zap.String("content_type", r.Header.Get("Content-Type")),
+			zap.Error(err),
+		)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	a.logger.Info("recognition completed",
+		zap.String("provider", result.Provider),
+		zap.String("request_id", result.RequestID),
+		zap.Duration("duration", time.Since(started)),
+		zap.Int("audio_bytes", len(audio)),
+		zap.String("content_type", r.Header.Get("Content-Type")),
+	)
 
 	finalText := a.processor.Process(result.Text)
 	entry := history.Entry{
@@ -170,7 +194,7 @@ func (a *App) handleRecognize(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:  time.Now(),
 	}
 	if err := a.history.Add(entry); err != nil {
-		a.logger.Warn("save history failed", "error", err)
+		a.logger.Warn("save history failed", zap.Error(err))
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -178,6 +202,7 @@ func (a *App) handleRecognize(w http.ResponseWriter, r *http.Request) {
 		"finalText":  finalText,
 		"provider":   result.Provider,
 		"confidence": result.Confidence,
+		"requestId":  result.RequestID,
 	})
 }
 
@@ -187,14 +212,47 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func withJSONErrors(next http.Handler, logger *slog.Logger) http.Handler {
+func withJSONErrors(next http.Handler, logger *zap.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logger.Error("request panic", "error", recovered)
+				logger.Error("request panic", zap.Any("error", recovered), zap.String("method", r.Method), zap.String("path", r.URL.Path))
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 			}
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+func withRequestLogging(next http.Handler, logger *zap.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		recorder := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(recorder, r)
+		logger.Info("http request",
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.Int("status", recorder.statusCode),
+			zap.Int("bytes", recorder.bytesWritten),
+			zap.Duration("duration", time.Since(started)),
+			zap.String("remote_addr", r.RemoteAddr),
+		)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode   int
+	bytesWritten int
+}
+
+func (r *statusRecorder) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (r *statusRecorder) Write(data []byte) (int, error) {
+	written, err := r.ResponseWriter.Write(data)
+	r.bytesWritten += written
+	return written, err
 }

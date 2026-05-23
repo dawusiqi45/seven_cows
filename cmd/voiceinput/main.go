@@ -4,10 +4,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -15,9 +15,11 @@ import (
 	"github.com/dawusiqi45/seven_cows/internal/asr"
 	"github.com/dawusiqi45/seven_cows/internal/config"
 	"github.com/dawusiqi45/seven_cows/internal/history"
+	"github.com/dawusiqi45/seven_cows/internal/logging"
 	"github.com/dawusiqi45/seven_cows/internal/secrets"
 	"github.com/dawusiqi45/seven_cows/internal/server"
 	"github.com/dawusiqi45/seven_cows/internal/textproc"
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -25,32 +27,45 @@ func main() {
 	dataDir := flag.String("data-dir", "data", "runtime data directory")
 	staticDir := flag.String("static-dir", "web/static", "web static assets directory")
 	secretsFile := flag.String("secrets-file", "voiceinput.local.json", "local ASR config file")
+	logFile := flag.String("log-file", "", "log file path, defaults to data/logs/voiceinput.log")
 	flag.Parse()
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
-		logger.Error("create data directory", "error", err)
+		_, _ = fmt.Fprintf(os.Stderr, "create data directory: %v\n", err)
 		os.Exit(1)
 	}
+	if strings.TrimSpace(*logFile) == "" {
+		*logFile = filepath.Join(*dataDir, "logs", "voiceinput.log")
+	}
+	logger, err := logging.New(*logFile)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "create logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() {
+		_ = logger.Sync()
+	}()
+	logger.Info("logger initialized", zap.String("log_file", *logFile))
 
 	configStore := config.NewFileStore(*dataDir + string(os.PathSeparator) + "config.json")
 	appConfig, err := configStore.Load()
 	if err != nil {
-		logger.Error("load config", "error", err)
+		logger.Error("load config failed", zap.Error(err))
 		os.Exit(1)
 	}
+	logger.Info("config loaded", zap.String("data_dir", *dataDir), zap.String("asr_provider", appConfig.ASR.Provider))
 	localSecrets, err := secrets.Load(*secretsFile)
 	if err != nil {
-		logger.Error("load local secrets", "path", *secretsFile, "error", err)
+		logger.Error("load local secrets failed", zap.String("path", *secretsFile), zap.Error(err))
 		os.Exit(1)
 	}
+	logger.Info("local secrets checked", zap.String("path", *secretsFile), zap.Bool("tencent_configured", hasTencentCredentials(localSecrets)))
 
 	historyStore := history.NewJSONStore(*dataDir + string(os.PathSeparator) + "history.json")
 	processor := textproc.NewProcessor(appConfig.Text)
 	recognizer, provider, err := buildRecognizer(appConfig.ASR.Provider, localSecrets, logger)
 	if err != nil {
-		logger.Error("create recognizer", "error", err)
+		logger.Error("create recognizer failed", zap.Error(err))
 		os.Exit(1)
 	}
 	appConfig.ASR.Provider = provider
@@ -72,9 +87,9 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("voice input server started", "url", "http://"+*addr)
+		logger.Info("voice input server started", zap.String("url", "http://"+*addr))
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("server failed", "error", err)
+			logger.Error("server failed", zap.Error(err))
 			os.Exit(1)
 		}
 	}()
@@ -86,13 +101,13 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := httpServer.Shutdown(ctx); err != nil {
-		logger.Error("server shutdown failed", "error", err)
+		logger.Error("server shutdown failed", zap.Error(err))
 		os.Exit(1)
 	}
 	logger.Info("server stopped")
 }
 
-func buildRecognizer(configProvider string, localSecrets secrets.Config, logger *slog.Logger) (asr.Recognizer, string, error) {
+func buildRecognizer(configProvider string, localSecrets secrets.Config, logger *zap.Logger) (asr.Recognizer, string, error) {
 	provider := secrets.First(
 		os.Getenv("VOICEINPUT_ASR_PROVIDER"),
 		localSecrets.ASRProvider,
@@ -122,11 +137,11 @@ func buildRecognizer(configProvider string, localSecrets secrets.Config, logger 
 			FilterModal:    0,
 			ConvertNumMode: 1,
 			HotwordList:    secrets.First(os.Getenv("TENCENT_ASR_HOTWORDS"), localSecrets.TencentCloud.Hotwords),
-		})
+		}, logger)
 		if err != nil {
 			return nil, "", err
 		}
-		logger.Info("using tencent asr provider", "endpoint", "asr.tencentcloudapi.com")
+		logger.Info("using tencent asr provider", zap.String("endpoint", "asr.tencentcloudapi.com"))
 		return recognizer, "tencent", nil
 	case "mock":
 		logger.Info("using mock asr provider")

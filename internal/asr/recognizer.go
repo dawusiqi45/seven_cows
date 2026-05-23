@@ -9,6 +9,7 @@ type Result struct {
 	Text       string  `json:"text"`
 	Provider   string  `json:"provider"`
 	Confidence float64 `json:"confidence"`
+	RequestID  string  `json:"requestId,omitempty"`
 }
 
 type Recognizer interface {
