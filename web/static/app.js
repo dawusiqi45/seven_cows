@@ -1,5 +1,6 @@
 const state = {
   config: null,
+  provider: "unknown",
   stream: null,
   audioContext: null,
   sourceNode: null,
@@ -7,18 +8,28 @@ const state = {
   sampleRate: 0,
   audioBuffers: [],
   recording: false,
+  processing: false,
+  recordingStartedAt: 0,
+  timerHandle: null,
 };
 
 const statusEl = document.querySelector("#status");
+const statusBadge = document.querySelector("#statusBadge");
+const providerBadge = document.querySelector("#providerBadge");
 const recordButton = document.querySelector("#recordButton");
+const recordButtonText = document.querySelector("#recordButtonText");
 const resultText = document.querySelector("#resultText");
+const resultMeta = document.querySelector("#resultMeta");
 const processButton = document.querySelector("#processButton");
 const copyButton = document.querySelector("#copyButton");
 const clearButton = document.querySelector("#clearButton");
 const historyList = document.querySelector("#historyList");
+const historyCount = document.querySelector("#historyCount");
 const clearHistoryButton = document.querySelector("#clearHistoryButton");
 const saveSettingsButton = document.querySelector("#saveSettingsButton");
 const meterBar = document.querySelector("#meterBar");
+const timerText = document.querySelector("#timerText");
+const messageBar = document.querySelector("#messageBar");
 
 const inputs = {
   autoPunctuation: document.querySelector("#autoPunctuation"),
@@ -26,16 +37,57 @@ const inputs = {
   enableCommands: document.querySelector("#enableCommands"),
 };
 
-function setStatus(text) {
+function setStatus(text, mode = "ready") {
   statusEl.textContent = text;
+  statusBadge.textContent = text;
+  statusBadge.className = "badge badge-muted";
+  if (mode === "recording") {
+    statusBadge.classList.add("badge-recording");
+  }
+  if (mode === "error") {
+    statusBadge.classList.add("badge-error");
+  }
+}
+
+function showMessage(text, mode = "info") {
+  messageBar.hidden = false;
+  messageBar.textContent = text;
+  messageBar.className = `message-bar ${mode === "error" ? "error" : ""}`;
+}
+
+function hideMessage() {
+  messageBar.hidden = true;
+  messageBar.textContent = "";
+}
+
+function setBusy(isBusy) {
+  state.processing = isBusy;
+  recordButton.disabled = isBusy;
+  processButton.disabled = isBusy;
+  copyButton.disabled = isBusy;
+  clearButton.disabled = isBusy;
+  saveSettingsButton.disabled = isBusy;
+  clearHistoryButton.disabled = isBusy;
+  recordButton.classList.toggle("processing", isBusy);
+  if (isBusy) {
+    recordButtonText.textContent = "识别中";
+  } else if (!state.recording) {
+    recordButtonText.textContent = "按住说话";
+  }
 }
 
 async function api(path, options = {}) {
   const response = await fetch(path, options);
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
   }
   return response.json();
+}
+
+async function loadHealth() {
+  const health = await api("/api/health");
+  state.provider = health.provider || "unknown";
+  providerBadge.textContent = `识别服务：${state.provider}`;
 }
 
 async function loadConfig() {
@@ -46,73 +98,95 @@ async function loadConfig() {
 }
 
 async function saveConfig() {
-  state.config.text.autoPunctuation = inputs.autoPunctuation.checked;
-  state.config.text.removeFillers = inputs.removeFillers.checked;
-  state.config.text.enableCommands = inputs.enableCommands.checked;
-  await api("/api/config", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(state.config),
-  });
-  setStatus("设置已保存");
+  try {
+    state.config.text.autoPunctuation = inputs.autoPunctuation.checked;
+    state.config.text.removeFillers = inputs.removeFillers.checked;
+    state.config.text.enableCommands = inputs.enableCommands.checked;
+    await api("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state.config),
+    });
+    setStatus("设置已保存");
+    showMessage("文本处理设置已保存。");
+  } catch (error) {
+    setStatus("设置保存失败", "error");
+    showMessage(`设置保存失败：${error.message}`, "error");
+  }
 }
 
 async function loadHistory() {
   const entries = await api("/api/history");
   historyList.innerHTML = "";
+  historyCount.textContent = `${entries.length} 条`;
   if (entries.length === 0) {
-    historyList.innerHTML = '<div class="history-item">暂无历史记录</div>';
+    historyList.innerHTML = '<div class="empty-state">暂无历史记录</div>';
     return;
   }
   for (const entry of entries) {
     const item = document.createElement("button");
     item.className = "history-item";
     item.type = "button";
-    item.innerHTML = `<time>${new Date(entry.createdAt).toLocaleString()}</time><div>${escapeHTML(entry.finalText)}</div>`;
+    item.innerHTML = `
+      <time>${new Date(entry.createdAt).toLocaleString()} · ${escapeHTML(entry.provider || "unknown")}</time>
+      <div class="history-text">${escapeHTML(entry.finalText || "")}</div>
+    `;
     item.addEventListener("click", () => {
-      resultText.value = entry.finalText;
+      resultText.value = entry.finalText || "";
+      updateResultMeta();
+      showMessage("已从历史记录回填文本。");
     });
     historyList.appendChild(item);
   }
 }
 
 async function startRecording() {
-  if (state.recording) {
+  if (state.recording || state.processing) {
     return;
   }
 
-  state.stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
+  try {
+    hideMessage();
+    state.stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
 
-  const AudioContext = window.AudioContext || window.webkitAudioContext;
-  state.audioContext = new AudioContext();
-  state.sampleRate = state.audioContext.sampleRate;
-  state.audioBuffers = [];
-  state.sourceNode = state.audioContext.createMediaStreamSource(state.stream);
-  state.processorNode = state.audioContext.createScriptProcessor(4096, 1, 1);
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    state.audioContext = new AudioContext();
+    state.sampleRate = state.audioContext.sampleRate;
+    state.audioBuffers = [];
+    state.sourceNode = state.audioContext.createMediaStreamSource(state.stream);
+    state.processorNode = state.audioContext.createScriptProcessor(4096, 1, 1);
 
-  state.processorNode.onaudioprocess = (event) => {
-    if (!state.recording) {
-      return;
-    }
-    const input = event.inputBuffer.getChannelData(0);
-    const chunk = new Float32Array(input);
-    state.audioBuffers.push(chunk);
-    updateMeter(chunk);
-  };
+    state.processorNode.onaudioprocess = (event) => {
+      if (!state.recording) {
+        return;
+      }
+      const input = event.inputBuffer.getChannelData(0);
+      const chunk = new Float32Array(input);
+      state.audioBuffers.push(chunk);
+      updateMeter(chunk);
+    };
 
-  state.sourceNode.connect(state.processorNode);
-  state.processorNode.connect(state.audioContext.destination);
-  state.recording = true;
+    state.sourceNode.connect(state.processorNode);
+    state.processorNode.connect(state.audioContext.destination);
+    state.recording = true;
+    state.recordingStartedAt = Date.now();
+    state.timerHandle = window.setInterval(updateTimer, 250);
+    updateTimer();
 
-  recordButton.classList.add("recording");
-  recordButton.textContent = "松开识别";
-  setStatus("正在录音");
+    recordButton.classList.add("recording");
+    recordButtonText.textContent = "松开识别";
+    setStatus("正在录音", "recording");
+  } catch (error) {
+    setStatus("无法录音", "error");
+    showMessage(`无法访问麦克风：${error.message}`, "error");
+    cleanupAudio();
+  }
 }
 
 async function stopRecording() {
@@ -122,10 +196,98 @@ async function stopRecording() {
 
   state.recording = false;
   recordButton.classList.remove("recording");
-  recordButton.textContent = "按住录音";
   meterBar.style.width = "0";
+  stopTimer();
   setStatus("正在识别");
 
+  const samples = mergeBuffers(state.audioBuffers);
+  await cleanupAudio();
+
+  if (samples.length < state.sampleRate * 0.35) {
+    setStatus("录音太短", "error");
+    recordButtonText.textContent = "按住说话";
+    showMessage("录音时间太短，请按住按钮说完整一句话。", "error");
+    return;
+  }
+
+  const wavBlob = encodeWav(samples, state.sampleRate, 16000);
+  await submitRecording(wavBlob);
+}
+
+async function submitRecording(blob) {
+  setBusy(true);
+  const startedAt = performance.now();
+  try {
+    const result = await api("/api/recognize", {
+      method: "POST",
+      headers: { "Content-Type": "audio/wav" },
+      body: blob,
+    });
+    resultText.value = result.finalText || "";
+    updateResultMeta(result);
+    if (state.config.ui.autoCopy && result.finalText) {
+      await navigator.clipboard.writeText(result.finalText);
+    }
+    const duration = Math.round(performance.now() - startedAt);
+    setStatus("识别完成");
+    showMessage(`识别完成，服务：${result.provider || state.provider}，耗时 ${duration}ms。`);
+    await loadHistory();
+  } catch (error) {
+    setStatus("识别失败", "error");
+    showMessage(`识别失败：${error.message}`, "error");
+  } finally {
+    setBusy(false);
+    updateResultMeta();
+  }
+}
+
+async function processCurrentText() {
+  if (!resultText.value.trim()) {
+    showMessage("当前没有可处理的文本。", "error");
+    return;
+  }
+  try {
+    const result = await api("/api/process", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: resultText.value }),
+    });
+    resultText.value = result.text;
+    updateResultMeta();
+    setStatus("文本已处理");
+    showMessage("已按当前设置处理文本。");
+  } catch (error) {
+    setStatus("处理失败", "error");
+    showMessage(`文本处理失败：${error.message}`, "error");
+  }
+}
+
+async function copyCurrentText() {
+  if (!resultText.value.trim()) {
+    showMessage("当前没有可复制的文本。", "error");
+    return;
+  }
+  await navigator.clipboard.writeText(resultText.value);
+  setStatus("已复制");
+  showMessage("文本已复制到剪贴板。");
+}
+
+async function clearHistory() {
+  if (!window.confirm("确定清空全部历史记录吗？")) {
+    return;
+  }
+  await api("/api/history", { method: "DELETE" });
+  await loadHistory();
+  showMessage("历史记录已清空。");
+}
+
+function clearResult() {
+  resultText.value = "";
+  updateResultMeta();
+  hideMessage();
+}
+
+async function cleanupAudio() {
   if (state.processorNode) {
     state.processorNode.disconnect();
     state.processorNode.onaudioprocess = null;
@@ -136,50 +298,41 @@ async function stopRecording() {
   if (state.stream) {
     state.stream.getTracks().forEach((track) => track.stop());
   }
-  if (state.audioContext) {
+  if (state.audioContext && state.audioContext.state !== "closed") {
     await state.audioContext.close();
   }
-
-  const samples = mergeBuffers(state.audioBuffers);
-  const wavBlob = encodeWav(samples, state.sampleRate, 16000);
-  await submitRecording(wavBlob);
+  state.stream = null;
+  state.audioContext = null;
+  state.sourceNode = null;
+  state.processorNode = null;
 }
 
-async function submitRecording(blob) {
-  try {
-    const result = await api("/api/recognize", {
-      method: "POST",
-      headers: { "Content-Type": "audio/wav" },
-      body: blob,
-    });
-    resultText.value = result.finalText;
-    if (state.config.ui.autoCopy) {
-      await navigator.clipboard.writeText(result.finalText);
-    }
-    setStatus(`识别完成：${result.provider}`);
-    await loadHistory();
-  } catch (error) {
-    setStatus(`识别失败：${error.message}`);
+function updateTimer() {
+  const elapsed = Math.max(0, Date.now() - state.recordingStartedAt);
+  const seconds = Math.floor(elapsed / 1000);
+  const minutesText = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const secondsText = String(seconds % 60).padStart(2, "0");
+  timerText.textContent = `${minutesText}:${secondsText}`;
+}
+
+function stopTimer() {
+  if (state.timerHandle) {
+    window.clearInterval(state.timerHandle);
+    state.timerHandle = null;
   }
+  timerText.textContent = "00:00";
 }
 
-async function processCurrentText() {
-  const result = await api("/api/process", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: resultText.value }),
-  });
-  resultText.value = result.text;
-}
-
-async function copyCurrentText() {
-  await navigator.clipboard.writeText(resultText.value);
-  setStatus("已复制到剪贴板");
-}
-
-async function clearHistory() {
-  await api("/api/history", { method: "DELETE" });
-  await loadHistory();
+function updateResultMeta(result = null) {
+  const text = resultText.value.trim();
+  if (!text) {
+    resultMeta.textContent = "暂无文本";
+    return;
+  }
+  const chars = Array.from(text).length;
+  const lines = text.split(/\n/).length;
+  const provider = result?.provider ? ` · ${result.provider}` : "";
+  resultMeta.textContent = `${chars} 字 · ${lines} 行${provider}`;
 }
 
 function mergeBuffers(buffers) {
@@ -261,11 +414,11 @@ function updateMeter(buffer) {
     sum += sample * sample;
   }
   const rms = Math.sqrt(sum / Math.max(buffer.length, 1));
-  meterBar.style.width = `${Math.min(100, Math.round(rms * 400))}%`;
+  meterBar.style.width = `${Math.min(100, Math.round(rms * 460))}%`;
 }
 
 function escapeHTML(value) {
-  return value.replace(/[&<>"']/g, (char) => {
+  return String(value).replace(/[&<>"']/g, (char) => {
     return {
       "&": "&amp;",
       "<": "&lt;",
@@ -278,6 +431,7 @@ function escapeHTML(value) {
 
 recordButton.addEventListener("pointerdown", startRecording);
 recordButton.addEventListener("pointerup", stopRecording);
+recordButton.addEventListener("pointercancel", stopRecording);
 recordButton.addEventListener("pointerleave", () => {
   if (state.recording) {
     stopRecording();
@@ -285,13 +439,17 @@ recordButton.addEventListener("pointerleave", () => {
 });
 processButton.addEventListener("click", processCurrentText);
 copyButton.addEventListener("click", copyCurrentText);
-clearButton.addEventListener("click", () => {
-  resultText.value = "";
-});
+clearButton.addEventListener("click", clearResult);
 clearHistoryButton.addEventListener("click", clearHistory);
 saveSettingsButton.addEventListener("click", saveConfig);
+resultText.addEventListener("input", updateResultMeta);
 
-loadConfig()
-  .then(loadHistory)
-  .then(() => setStatus("准备就绪"))
-  .catch((error) => setStatus(`初始化失败：${error.message}`));
+Promise.all([loadHealth(), loadConfig(), loadHistory()])
+  .then(() => {
+    updateResultMeta();
+    setStatus("准备就绪");
+  })
+  .catch((error) => {
+    setStatus("初始化失败", "error");
+    showMessage(`初始化失败：${error.message}`, "error");
+  });
