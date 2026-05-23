@@ -72,7 +72,7 @@ function setBusy(isBusy) {
   if (isBusy) {
     recordButtonText.textContent = "识别中";
   } else if (!state.recording) {
-    recordButtonText.textContent = "按住说话";
+    recordButtonText.textContent = "开始录音";
   }
 }
 
@@ -180,7 +180,7 @@ async function startRecording() {
     updateTimer();
 
     recordButton.classList.add("recording");
-    recordButtonText.textContent = "松开识别";
+    recordButtonText.textContent = "停止并识别";
     setStatus("正在录音", "recording");
   } catch (error) {
     setStatus("无法录音", "error");
@@ -205,8 +205,8 @@ async function stopRecording() {
 
   if (samples.length < state.sampleRate * 0.35) {
     setStatus("录音太短", "error");
-    recordButtonText.textContent = "按住说话";
-    showMessage("录音时间太短，请按住按钮说完整一句话。", "error");
+    recordButtonText.textContent = "开始录音";
+    showMessage("录音时间太短，请点击开始后说完整一句话。", "error");
     return;
   }
 
@@ -429,14 +429,18 @@ function escapeHTML(value) {
   });
 }
 
-recordButton.addEventListener("pointerdown", startRecording);
-recordButton.addEventListener("pointerup", stopRecording);
-recordButton.addEventListener("pointercancel", stopRecording);
-recordButton.addEventListener("pointerleave", () => {
-  if (state.recording) {
-    stopRecording();
+async function toggleRecording() {
+  if (state.processing) {
+    return;
   }
-});
+  if (state.recording) {
+    await stopRecording();
+  } else {
+    await startRecording();
+  }
+}
+
+recordButton.addEventListener("click", toggleRecording);
 processButton.addEventListener("click", processCurrentText);
 copyButton.addEventListener("click", copyCurrentText);
 clearButton.addEventListener("click", clearResult);
@@ -447,7 +451,7 @@ resultText.addEventListener("input", updateResultMeta);
 Promise.all([loadHealth(), loadConfig(), loadHistory()])
   .then(() => {
     updateResultMeta();
-    setStatus("准备就绪");
+    setStatus("点击开始录音");
   })
   .catch((error) => {
     setStatus("初始化失败", "error");
