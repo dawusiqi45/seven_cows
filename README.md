@@ -59,6 +59,10 @@ D:\prosoft\package\goproject\LanguageInput\voiceinput.local.json
 go test ./...
 ```
 
+## 演示说明
+
+演示步骤见 [docs/demo-guide.md](docs/demo-guide.md)。
+
 ## 项目结构
 
 ```text
