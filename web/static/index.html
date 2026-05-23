@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>语音输入法助手</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>语音输入法助手</h1>
+            <p id="status">准备就绪</p>
+          </div>
+          <button id="settingsButton" class="icon-button" title="设置">⚙</button>
+        </header>
+
+        <section class="recorder">
+          <button id="recordButton" class="record-button">按住录音</button>
+          <div class="meter" aria-hidden="true"><span id="meterBar"></span></div>
+        </section>
+
+        <section class="result-panel">
+          <label for="resultText">识别结果</label>
+          <textarea id="resultText" rows="8" placeholder="录音后结果会显示在这里，也可以直接输入文字测试处理流程。"></textarea>
+          <div class="actions">
+            <button id="processButton">处理文本</button>
+            <button id="copyButton">复制</button>
+            <button id="clearButton">清空</button>
+          </div>
+        </section>
+      </section>
+
+      <aside class="side">
+        <section class="panel" id="settingsPanel">
+          <h2>设置</h2>
+          <label class="toggle">
+            <input id="autoPunctuation" type="checkbox" />
+            <span>自动标点</span>
+          </label>
+          <label class="toggle">
+            <input id="removeFillers" type="checkbox" />
+            <span>清理语气词</span>
+          </label>
+          <label class="toggle">
+            <input id="enableCommands" type="checkbox" />
+            <span>启用口令</span>
+          </label>
+          <button id="saveSettingsButton">保存设置</button>
+        </section>
+
+        <section class="panel history-panel">
+          <div class="panel-title">
+            <h2>历史</h2>
+            <button id="clearHistoryButton">清空</button>
+          </div>
+          <div id="historyList" class="history-list"></div>
+        </section>
+      </aside>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
