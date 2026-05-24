@@ -26,6 +26,18 @@ go run ./cmd/voiceinput
 http://127.0.0.1:8080
 ```
 
+运行日志默认写入：
+
+```text
+data/logs/voiceinput.log
+```
+
+也可以通过参数指定日志文件：
+
+```bash
+go run ./cmd/voiceinput -log-file data/logs/dev.log
+```
+
 ## 腾讯云 ASR
 
 默认使用 `mock` 识别器，便于无密钥时验证完整流程。接入腾讯云一句话识别时，直接修改项目根目录下的配置文件：
@@ -66,6 +78,7 @@ cmd/voiceinput       应用入口
 internal/asr         语音识别接口与 mock 实现
 internal/config      配置读写
 internal/history     历史记录存储
+internal/logging     zap 日志初始化
 internal/server      HTTP API 与静态页面服务
 internal/textproc    文本处理
 web/static           前端页面
@@ -74,7 +87,9 @@ docs                 需求与计划文档
 
 ## 第三方依赖
 
-当前版本仅使用 Go 标准库，没有引入第三方库或框架。腾讯云 ASR 通过 HTTP API 和 TC3-HMAC-SHA256 签名直接调用，未引入腾讯云 SDK。
+- `go.uber.org/zap`：结构化日志，记录服务启动、HTTP 请求、识别调用、错误信息和耗时。
+
+腾讯云 ASR 通过 HTTP API 和 TC3-HMAC-SHA256 签名直接调用，未引入腾讯云 SDK。
 
 ## 原创功能部分
 
@@ -82,6 +97,7 @@ docs                 需求与计划文档
 - ASR 抽象接口、mock 识别器、腾讯云 ASR 适配器。
 - 文本清洗、口令转换、自动标点处理。
 - 本地 JSON 配置与历史记录。
+- 基于 zap 的结构化日志记录。
 - Web 录音控制台和浏览器端 WAV 编码。
 
 ## 后续扩展

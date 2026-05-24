@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -37,9 +39,10 @@ type TencentConfig struct {
 type TencentRecognizer struct {
 	config TencentConfig
 	client *http.Client
+	logger *zap.Logger
 }
 
-func NewTencentRecognizer(config TencentConfig) (*TencentRecognizer, error) {
+func NewTencentRecognizer(config TencentConfig, logger *zap.Logger) (*TencentRecognizer, error) {
 	config.SecretID = strings.TrimSpace(config.SecretID)
 	config.SecretKey = strings.TrimSpace(config.SecretKey)
 	if config.SecretID == "" || config.SecretKey == "" {
@@ -61,6 +64,7 @@ func NewTencentRecognizer(config TencentConfig) (*TencentRecognizer, error) {
 	return &TencentRecognizer{
 		config: config,
 		client: &http.Client{Timeout: 20 * time.Second},
+		logger: logger.Named("tencent_asr"),
 	}, nil
 }
 
@@ -85,6 +89,14 @@ func (r *TencentRecognizer) Recognize(ctx context.Context, audio []byte, content
 	if strings.TrimSpace(r.config.HotwordList) != "" {
 		payload["HotwordList"] = r.config.HotwordList
 	}
+	r.logger.Info("tencent asr request prepared",
+		zap.Int("audio_bytes", len(audio)),
+		zap.String("content_type", contentType),
+		zap.String("region", r.config.Region),
+		zap.String("engine", r.config.Engine),
+		zap.String("voice_format", r.config.VoiceFormat),
+		zap.Bool("has_hotwords", strings.TrimSpace(r.config.HotwordList) != ""),
+	)
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -97,8 +109,10 @@ func (r *TencentRecognizer) Recognize(ctx context.Context, audio []byte, content
 	}
 	r.sign(req, body, time.Now().UTC())
 
+	started := time.Now()
 	resp, err := r.client.Do(req)
 	if err != nil {
+		r.logger.Warn("tencent asr request failed", zap.Duration("duration", time.Since(started)), zap.Error(err))
 		return Result{}, err
 	}
 	defer resp.Body.Close()
@@ -108,24 +122,42 @@ func (r *TencentRecognizer) Recognize(ctx context.Context, audio []byte, content
 		return Result{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Result{}, fmt.Errorf("tencent asr http %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		r.logger.Warn("tencent asr http error", zap.Int("status", resp.StatusCode), zap.Duration("duration", time.Since(started)))
+		return Result{}, fmt.Errorf("tencent asr http %d", resp.StatusCode)
 	}
 
 	var parsed tencentResponse
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		r.logger.Warn("tencent asr decode failed", zap.Duration("duration", time.Since(started)), zap.Error(err))
 		return Result{}, err
 	}
 	if parsed.Response.Error != nil {
+		r.logger.Warn("tencent asr api error",
+			zap.String("code", parsed.Response.Error.Code),
+			zap.String("request_id", parsed.Response.RequestID),
+			zap.Duration("duration", time.Since(started)),
+		)
 		return Result{}, fmt.Errorf("tencent asr %s: %s", parsed.Response.Error.Code, parsed.Response.Error.Message)
 	}
 	if strings.TrimSpace(parsed.Response.Result) == "" {
+		r.logger.Warn("tencent asr returned empty result",
+			zap.String("request_id", parsed.Response.RequestID),
+			zap.Int("audio_duration_ms", parsed.Response.AudioDuration),
+			zap.Duration("duration", time.Since(started)),
+		)
 		return Result{}, fmt.Errorf("tencent asr returned empty result, request id: %s", parsed.Response.RequestID)
 	}
+	r.logger.Info("tencent asr request completed",
+		zap.String("request_id", parsed.Response.RequestID),
+		zap.Int("audio_duration_ms", parsed.Response.AudioDuration),
+		zap.Duration("duration", time.Since(started)),
+	)
 
 	return Result{
 		Text:       parsed.Response.Result,
 		Provider:   "tencent",
 		Confidence: 0,
+		RequestID:  parsed.Response.RequestID,
 	}, nil
 }
 
