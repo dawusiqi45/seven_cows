@@ -24,7 +24,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "HTTP listen address")
 	dataDir := flag.String("data-dir", "data", "runtime data directory")
 	staticDir := flag.String("static-dir", "web/static", "web static assets directory")
-	secretsFile := flag.String("secrets-file", "../voiceinput.local.json", "local secrets config file, outside git repository by default")
+	secretsFile := flag.String("secrets-file", "voiceinput.local.json", "local secrets config file ignored by git")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))

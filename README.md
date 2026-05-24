@@ -28,10 +28,10 @@ http://127.0.0.1:8080
 
 ## 腾讯云 ASR
 
-默认使用 `mock` 识别器，便于无密钥时验证完整流程。接入腾讯云一句话识别时，在仓库上一级目录创建本地配置文件：
+默认使用 `mock` 识别器，便于无密钥时验证完整流程。接入腾讯云一句话识别时，在项目根目录创建本地配置文件：
 
 ```text
-D:\prosoft\package\goproject\LanguageInput\voiceinput.local.json
+D:\prosoft\package\goproject\LanguageInput\seven_cows\voiceinput.local.json
 ```
 
 配置格式参考：
@@ -40,8 +40,8 @@ D:\prosoft\package\goproject\LanguageInput\voiceinput.local.json
 {
   "asrProvider": "tencent",
   "tencentCloud": {
-    "secretId": "your-secret-id",
-    "secretKey": "your-secret-key",
+    "secretId": "****",
+    "secretKey": "****",
     "region": "ap-shanghai",
     "engine": "16k_zh",
     "hotwords": ""
@@ -49,7 +49,7 @@ D:\prosoft\package\goproject\LanguageInput\voiceinput.local.json
 }
 ```
 
-真实密钥配置文件不放在仓库目录内，不会提交到 GitHub。项目内只保留 `voiceinput.local.example.json` 示例文件。
+真实密钥文件名是 `voiceinput.local.json`，已加入 `.gitignore`，不会提交到 GitHub。项目内只提交 `voiceinput.local.example.json` 脱敏示例文件，敏感字段使用 `****`。
 
 前端会把浏览器麦克风音频编码成 16kHz 单声道 WAV 后提交给 Go 后端，后端再调用腾讯云 ASR。
 
