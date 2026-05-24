@@ -12,6 +12,6 @@
     "apiKey": "****",
     "model": "glm-5",
     "baseUrl": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    "timeoutSeconds": 10
+    "timeoutSeconds": 60
   }
 }
