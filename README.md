@@ -28,13 +28,13 @@ http://127.0.0.1:8080
 
 ## 腾讯云 ASR
 
-默认使用 `mock` 识别器，便于无密钥时验证完整流程。接入腾讯云一句话识别时，在项目根目录创建本地配置文件：
+默认使用 `mock` 识别器，便于无密钥时验证完整流程。接入腾讯云一句话识别时，直接修改项目根目录下的配置文件：
 
 ```text
 D:\prosoft\package\goproject\LanguageInput\seven_cows\voiceinput.local.json
 ```
 
-配置格式参考：
+配置文件随项目提交到 GitHub，但敏感字段使用 `****` 脱敏：
 
 ```json
 {
@@ -49,9 +49,7 @@ D:\prosoft\package\goproject\LanguageInput\seven_cows\voiceinput.local.json
 }
 ```
 
-真实密钥文件名是 `voiceinput.local.json`，已加入 `.gitignore`，不会提交到 GitHub。项目内只提交 `voiceinput.local.example.json` 脱敏示例文件，敏感字段使用 `****`。
-
-实际运行时请修改 `voiceinput.local.json`；`voiceinput.local.example.json` 只作为提交到 GitHub 的配置格式示例。需要切回 mock 模式时，把本地配置中的 `asrProvider` 改为 `mock` 即可。
+实际运行时只需要把 `secretId` 和 `secretKey` 的 `****` 改成腾讯云真实密钥。提交代码前请确认这两个字段已经恢复为 `****`，避免泄露密钥。需要切回 mock 模式时，把 `asrProvider` 改为 `mock` 即可。
 
 前端会把浏览器麦克风音频编码成 16kHz 单声道 WAV 后提交给 Go 后端，后端再调用腾讯云 ASR。
 

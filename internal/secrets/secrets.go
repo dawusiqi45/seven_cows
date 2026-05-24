@@ -44,8 +44,9 @@ func Load(path string) (Config, error) {
 
 func First(values ...string) string {
 	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
+		cleaned := strings.TrimSpace(value)
+		if cleaned != "" && cleaned != "****" {
+			return cleaned
 		}
 	}
 	return ""
