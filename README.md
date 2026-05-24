@@ -51,6 +51,8 @@ D:\prosoft\package\goproject\LanguageInput\seven_cows\voiceinput.local.json
 
 真实密钥文件名是 `voiceinput.local.json`，已加入 `.gitignore`，不会提交到 GitHub。项目内只提交 `voiceinput.local.example.json` 脱敏示例文件，敏感字段使用 `****`。
 
+实际运行时请修改 `voiceinput.local.json`；`voiceinput.local.example.json` 只作为提交到 GitHub 的配置格式示例。需要切回 mock 模式时，把本地配置中的 `asrProvider` 改为 `mock` 即可。
+
 前端会把浏览器麦克风音频编码成 16kHz 单声道 WAV 后提交给 Go 后端，后端再调用腾讯云 ASR。
 
 ## 测试
