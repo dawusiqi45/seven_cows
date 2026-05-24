@@ -66,6 +66,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/config", a.handleConfig)
 	mux.HandleFunc("/api/history", a.handleHistory)
 	mux.HandleFunc("/api/process", a.handleProcess)
+	mux.HandleFunc("/api/optimize", a.handleOptimize)
 	mux.HandleFunc("/api/recognize", a.handleRecognize)
 	return withRequestLogging(withJSONErrors(mux, a.logger), a.logger)
 }
@@ -80,7 +81,6 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"timestamp": time.Now(),
 		"provider":  a.config.ASR.Provider,
 		"llm": map[string]any{
-			"enabled":  a.config.LLM.Enabled,
 			"provider": a.optimizer.Provider(),
 			"mode":     a.config.LLM.Mode,
 		},
@@ -112,7 +112,6 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 			zap.Bool("auto_punctuation", next.Text.AutoPunctuation),
 			zap.Bool("remove_fillers", next.Text.RemoveFillers),
 			zap.Bool("enable_commands", next.Text.EnableCommands),
-			zap.Bool("llm_enabled", next.LLM.Enabled),
 			zap.String("llm_mode", next.LLM.Mode),
 		)
 		writeJSON(w, http.StatusOK, next)
@@ -162,6 +161,60 @@ func (a *App) handleProcess(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *App) handleOptimize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	originalText := strings.TrimSpace(req.Text)
+	if originalText == "" {
+		http.Error(w, "text is empty", http.StatusBadRequest)
+		return
+	}
+
+	processedText := a.processor.Process(originalText)
+	finalText := processedText
+	optimizerProvider := ""
+	optimizeStarted := time.Now()
+	optimized, optimizeErr := a.optimizer.Optimize(r.Context(), llm.Input{
+		Text: processedText,
+		Mode: a.config.LLM.Mode,
+	})
+	if optimizeErr != nil {
+		a.logger.Warn("manual text optimization failed",
+			zap.Duration("duration", time.Since(optimizeStarted)),
+			zap.String("optimizer", a.optimizer.Provider()),
+			zap.Error(optimizeErr),
+		)
+	} else if !optimized.Skipped && strings.TrimSpace(optimized.Text) != "" {
+		finalText = optimized.Text
+		optimizerProvider = optimized.Provider
+		a.logger.Info("manual text optimization completed",
+			zap.String("optimizer", optimized.Provider),
+			zap.String("model", optimized.Model),
+			zap.Duration("duration", time.Since(optimizeStarted)),
+		)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"originalText":   originalText,
+		"processedText":  processedText,
+		"finalText":      finalText,
+		"optimized":      optimizerProvider != "",
+		"optimizer":      optimizerProvider,
+		"optimizerState": a.optimizer.Provider(),
+	})
+}
+
 func (a *App) handleRecognize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -197,41 +250,14 @@ func (a *App) handleRecognize(w http.ResponseWriter, r *http.Request) {
 
 	processedText := a.processor.Process(result.Text)
 	finalText := processedText
-	optimizerProvider := ""
-	if a.config.LLM.Enabled {
-		optimizeStarted := time.Now()
-		optimized, optimizeErr := a.optimizer.Optimize(r.Context(), llm.Input{
-			Text: processedText,
-			Mode: a.config.LLM.Mode,
-		})
-		if optimizeErr != nil {
-			a.logger.Warn("text optimization failed",
-				zap.Duration("duration", time.Since(optimizeStarted)),
-				zap.String("optimizer", a.optimizer.Provider()),
-				zap.Error(optimizeErr),
-			)
-		} else if !optimized.Skipped && strings.TrimSpace(optimized.Text) != "" {
-			finalText = optimized.Text
-			optimizerProvider = optimized.Provider
-			a.logger.Info("text optimization completed",
-				zap.String("optimizer", optimized.Provider),
-				zap.String("model", optimized.Model),
-				zap.Duration("duration", time.Since(optimizeStarted)),
-			)
-		}
-	}
 	entry := history.Entry{
-		ID:                time.Now().Format("20060102150405.000000000"),
-		RawText:           result.Text,
-		ProcessedText:     processedText,
-		FinalText:         finalText,
-		Provider:          result.Provider,
-		OptimizerProvider: optimizerProvider,
-		Confidence:        result.Confidence,
-		CreatedAt:         time.Now(),
-	}
-	if optimizerProvider != "" {
-		entry.OptimizedText = finalText
+		ID:            time.Now().Format("20060102150405.000000000"),
+		RawText:       result.Text,
+		ProcessedText: processedText,
+		FinalText:     finalText,
+		Provider:      result.Provider,
+		Confidence:    result.Confidence,
+		CreatedAt:     time.Now(),
 	}
 	if err := a.history.Add(entry); err != nil {
 		a.logger.Warn("save history failed", zap.Error(err))
@@ -241,8 +267,8 @@ func (a *App) handleRecognize(w http.ResponseWriter, r *http.Request) {
 		"rawText":       result.Text,
 		"processedText": processedText,
 		"finalText":     finalText,
-		"optimized":     optimizerProvider != "",
-		"optimizer":     optimizerProvider,
+		"optimized":     false,
+		"optimizer":     "",
 		"provider":      result.Provider,
 		"confidence":    result.Confidence,
 		"requestId":     result.RequestID,

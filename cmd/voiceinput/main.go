@@ -79,7 +79,7 @@ func main() {
 		logger.Error("create optimizer failed", zap.Error(err))
 		os.Exit(1)
 	}
-	logger.Info("text optimizer selected", zap.String("provider", optimizerProvider), zap.Bool("enabled", appConfig.LLM.Enabled))
+	logger.Info("text optimizer selected", zap.String("provider", optimizerProvider), zap.String("mode", appConfig.LLM.Mode))
 
 	app := server.New(server.Dependencies{
 		Config:      appConfig,

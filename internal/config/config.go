@@ -21,8 +21,7 @@ type ASRConfig struct {
 }
 
 type LLMConfig struct {
-	Enabled bool   `json:"enabled"`
-	Mode    string `json:"mode"`
+	Mode string `json:"mode"`
 }
 
 type UIConfig struct {
@@ -42,8 +41,7 @@ func Default() AppConfig {
 			Hotwords:        []string{"七牛云", "Go语言", "语音输入法"},
 		},
 		LLM: LLMConfig{
-			Enabled: false,
-			Mode:    "conservative",
+			Mode: "conservative",
 		},
 		UI: UIConfig{
 			AutoCopy: true,
