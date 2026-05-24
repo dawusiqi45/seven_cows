@@ -195,6 +195,8 @@ func (a *App) handleOptimize(w http.ResponseWriter, r *http.Request) {
 			zap.String("optimizer", a.optimizer.Provider()),
 			zap.Error(optimizeErr),
 		)
+		http.Error(w, "智能优化调用失败，请稍后重试或检查 GLM 配置", http.StatusBadGateway)
+		return
 	} else if !optimized.Skipped && strings.TrimSpace(optimized.Text) != "" {
 		finalText = optimized.Text
 		optimizerProvider = optimized.Provider

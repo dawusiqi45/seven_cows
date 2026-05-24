@@ -39,8 +39,8 @@ func NewGLMOptimizer(config GLMConfig, logger *zap.Logger) (*GLMOptimizer, error
 	if strings.TrimSpace(config.BaseURL) == "" {
 		config.BaseURL = defaultGLMBaseURL
 	}
-	if config.TimeoutSeconds <= 0 {
-		config.TimeoutSeconds = 10
+	if config.TimeoutSeconds < 30 {
+		config.TimeoutSeconds = 30
 	}
 	return &GLMOptimizer{
 		config: config,
@@ -127,9 +127,9 @@ func (o *GLMOptimizer) Optimize(ctx context.Context, input Input) (Result, error
 func systemPrompt(mode string) string {
 	switch strings.TrimSpace(mode) {
 	case "formal":
-		return "你是语音输入文本优化器。请在不改变原意、不添加事实、不扩写内容的前提下，把用户语音识别文本整理为更正式、清晰、通顺的中文。只输出优化后的文本，不要解释。"
+		return "你是语音输入文本优化器。请在不改变核心事实、不编造新信息的前提下，把用户口述识别文本整理为正式、清晰、通顺的中文。可以删除语气词和重复表达，补全明显缺失的连接词、标点和断句，修正同音字、错别字和不自然表达。只输出优化后的文本，不要解释。"
 	default:
-		return "你是语音识别结果纠错器。请只修正错别字、同音字、明显断句和标点问题；不要总结、不要扩写、不要添加用户没有说的信息。保留原意和原有语气。只输出优化后的文本，不要解释。"
+		return "你是语音输入文本优化器。请把用户口述的语音识别文本优化成更清晰、连贯、自然的中文。要求：删除“嗯、啊、呃、然后”等无意义口头语和重复词；修正同音字、错别字、明显识别错误；补全标点、断句和必要连接词；在不改变原意、不编造事实的前提下，让表达更完整、更适合直接作为输入文本。只输出优化后的文本，不要解释。"
 	}
 }
 
