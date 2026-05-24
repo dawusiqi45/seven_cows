@@ -24,7 +24,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "HTTP listen address")
 	dataDir := flag.String("data-dir", "data", "runtime data directory")
 	staticDir := flag.String("static-dir", "web/static", "web static assets directory")
-	secretsFile := flag.String("secrets-file", "../voiceinput.local.json", "local secrets config file, outside git repository by default")
+	secretsFile := flag.String("secrets-file", "voiceinput.local.json", "local ASR config file")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -109,6 +109,10 @@ func buildRecognizer(configProvider string, localSecrets secrets.Config, logger 
 
 	switch strings.ToLower(provider) {
 	case "tencent":
+		if !hasTencentCredentials(localSecrets) {
+			logger.Warn("tencent asr selected but credentials are not configured, falling back to mock")
+			return asr.NewMockRecognizer(), "mock", nil
+		}
 		recognizer, err := asr.NewTencentRecognizer(asr.TencentConfig{
 			SecretID:       secrets.First(os.Getenv("TENCENTCLOUD_SECRET_ID"), localSecrets.TencentCloud.SecretID),
 			SecretKey:      secrets.First(os.Getenv("TENCENTCLOUD_SECRET_KEY"), localSecrets.TencentCloud.SecretKey),

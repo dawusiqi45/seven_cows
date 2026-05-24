@@ -1,8 +1,8 @@
 {
   "asrProvider": "tencent",
   "tencentCloud": {
-    "secretId": "your-secret-id",
-    "secretKey": "your-secret-key",
+    "secretId": "****",
+    "secretKey": "****",
     "region": "ap-shanghai",
     "engine": "16k_zh",
     "hotwords": ""
