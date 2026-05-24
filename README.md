@@ -64,7 +64,7 @@ D:\prosoft\package\goproject\LanguageInput\seven_cows\voiceinput.local.json
     "apiKey": "****",
     "model": "glm-5",
     "baseUrl": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    "timeoutSeconds": 30
+    "timeoutSeconds": 60
   }
 }
 ```
@@ -81,7 +81,7 @@ D:\prosoft\package\goproject\LanguageInput\seven_cows\voiceinput.local.json
 录音 -> 腾讯云 ASR -> 展示识别文本 -> 点击智能优化 -> GLM 文本优化 -> 展示优化结果
 ```
 
-GLM 只用于修正错别字、同音字、标点、断句和口语化表达，不负责语音识别本身。录音识别完成后，页面会先展示腾讯云 ASR 和本地规则处理后的文本；用户点击“智能优化”按钮后，后端才会把当前文本提交给 GLM 优化。如果未配置 `llm.apiKey`，则只执行本地规则处理；如果 GLM 调用超时或失败，页面会提示错误并保留当前文本。
+GLM 只用于修正错别字、同音字、标点、断句和口语化表达，不负责语音识别本身。录音识别完成后，页面会先展示腾讯云 ASR 和本地规则处理后的文本；用户点击“智能优化”按钮后，后端才会把当前文本提交给 GLM 优化。GLM 请求会关闭思考过程并限制输出长度，减少等待时间。如果未配置 `llm.apiKey`，则只执行本地规则处理；如果 GLM 调用超时或失败，页面会提示错误并保留当前文本。
 
 ## 测试
 

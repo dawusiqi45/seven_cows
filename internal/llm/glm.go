@@ -39,8 +39,8 @@ func NewGLMOptimizer(config GLMConfig, logger *zap.Logger) (*GLMOptimizer, error
 	if strings.TrimSpace(config.BaseURL) == "" {
 		config.BaseURL = defaultGLMBaseURL
 	}
-	if config.TimeoutSeconds < 30 {
-		config.TimeoutSeconds = 30
+	if config.TimeoutSeconds < 60 {
+		config.TimeoutSeconds = 60
 	}
 	return &GLMOptimizer{
 		config: config,
@@ -68,7 +68,10 @@ func (o *GLMOptimizer) Optimize(ctx context.Context, input Input) (Result, error
 			{Role: "system", Content: systemPrompt(input.Mode)},
 			{Role: "user", Content: text},
 		},
-		Temperature: 0.2,
+		Temperature:    0.2,
+		MaxTokens:      512,
+		Thinking:       &glmThinking{Type: "disabled"},
+		ResponseFormat: &glmResponseFormat{Type: "text"},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -80,7 +83,8 @@ func (o *GLMOptimizer) Optimize(ctx context.Context, input Input) (Result, error
 		return Result{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+o.config.APIKey)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.Header.Set("Accept-Language", "zh-CN")
 
 	started := time.Now()
 	resp, err := o.client.Do(req)
@@ -134,9 +138,20 @@ func systemPrompt(mode string) string {
 }
 
 type glmRequest struct {
-	Model       string       `json:"model"`
-	Messages    []glmMessage `json:"messages"`
-	Temperature float64      `json:"temperature"`
+	Model          string             `json:"model"`
+	Messages       []glmMessage       `json:"messages"`
+	Temperature    float64            `json:"temperature"`
+	MaxTokens      int                `json:"max_tokens,omitempty"`
+	Thinking       *glmThinking       `json:"thinking,omitempty"`
+	ResponseFormat *glmResponseFormat `json:"response_format,omitempty"`
+}
+
+type glmThinking struct {
+	Type string `json:"type"`
+}
+
+type glmResponseFormat struct {
+	Type string `json:"type"`
 }
 
 type glmMessage struct {

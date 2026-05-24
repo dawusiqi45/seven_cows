@@ -188,7 +188,7 @@ func buildOptimizer(localSecrets secrets.Config, logger *zap.Logger) (llm.Optimi
 			APIKey:         secrets.First(os.Getenv("GLM_API_KEY"), localSecrets.LLM.APIKey),
 			Model:          firstDefault("glm-5", os.Getenv("GLM_MODEL"), localSecrets.LLM.Model),
 			BaseURL:        firstDefault("https://open.bigmodel.cn/api/paas/v4/chat/completions", os.Getenv("GLM_BASE_URL"), localSecrets.LLM.BaseURL),
-			TimeoutSeconds: firstPositive(localSecrets.LLM.TimeoutSeconds, 10),
+			TimeoutSeconds: firstPositive(localSecrets.LLM.TimeoutSeconds, 60),
 		}, logger)
 		if err != nil {
 			return nil, "", err
