@@ -35,6 +35,7 @@ const inputs = {
   autoPunctuation: document.querySelector("#autoPunctuation"),
   removeFillers: document.querySelector("#removeFillers"),
   enableCommands: document.querySelector("#enableCommands"),
+  smartOptimize: document.querySelector("#smartOptimize"),
 };
 
 function setStatus(text, mode = "ready") {
@@ -87,26 +88,33 @@ async function api(path, options = {}) {
 async function loadHealth() {
   const health = await api("/api/health");
   state.provider = health.provider || "unknown";
-  providerBadge.textContent = `识别服务：${state.provider}`;
+  const llmText = health.llm?.enabled ? ` · 优化：${health.llm.provider}` : "";
+  providerBadge.textContent = `识别服务：${state.provider}${llmText}`;
 }
 
 async function loadConfig() {
   state.config = await api("/api/config");
+  state.config.llm = state.config.llm || { enabled: false, mode: "conservative" };
   inputs.autoPunctuation.checked = state.config.text.autoPunctuation;
   inputs.removeFillers.checked = state.config.text.removeFillers;
   inputs.enableCommands.checked = state.config.text.enableCommands;
+  inputs.smartOptimize.checked = state.config.llm.enabled;
 }
 
 async function saveConfig() {
   try {
+    state.config.llm = state.config.llm || { enabled: false, mode: "conservative" };
     state.config.text.autoPunctuation = inputs.autoPunctuation.checked;
     state.config.text.removeFillers = inputs.removeFillers.checked;
     state.config.text.enableCommands = inputs.enableCommands.checked;
+    state.config.llm.enabled = inputs.smartOptimize.checked;
+    state.config.llm.mode = state.config.llm.mode || "conservative";
     await api("/api/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(state.config),
     });
+    await loadHealth();
     setStatus("设置已保存");
     showMessage("文本处理设置已保存。");
   } catch (error) {
@@ -128,7 +136,7 @@ async function loadHistory() {
     item.className = "history-item";
     item.type = "button";
     item.innerHTML = `
-      <time>${new Date(entry.createdAt).toLocaleString()} · ${escapeHTML(entry.provider || "unknown")}</time>
+      <time>${new Date(entry.createdAt).toLocaleString()} · ${escapeHTML(entry.provider || "unknown")}${entry.optimizerProvider ? ` · ${escapeHTML(entry.optimizerProvider)}` : ""}</time>
       <div class="history-text">${escapeHTML(entry.finalText || "")}</div>
     `;
     item.addEventListener("click", () => {
@@ -230,7 +238,8 @@ async function submitRecording(blob) {
     }
     const duration = Math.round(performance.now() - startedAt);
     setStatus("识别完成");
-    showMessage(`识别完成，服务：${result.provider || state.provider}，耗时 ${duration}ms。`);
+    const optimizeText = result.optimized ? `，已由 ${result.optimizer} 优化` : "";
+    showMessage(`识别完成，服务：${result.provider || state.provider}${optimizeText}，耗时 ${duration}ms。`);
     await loadHistory();
   } catch (error) {
     setStatus("识别失败", "error");

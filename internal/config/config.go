@@ -12,11 +12,17 @@ import (
 type AppConfig struct {
 	ASR  ASRConfig           `json:"asr"`
 	Text textproc.TextConfig `json:"text"`
+	LLM  LLMConfig           `json:"llm"`
 	UI   UIConfig            `json:"ui"`
 }
 
 type ASRConfig struct {
 	Provider string `json:"provider"`
+}
+
+type LLMConfig struct {
+	Enabled bool   `json:"enabled"`
+	Mode    string `json:"mode"`
 }
 
 type UIConfig struct {
@@ -34,6 +40,10 @@ func Default() AppConfig {
 			RemoveFillers:   true,
 			EnableCommands:  true,
 			Hotwords:        []string{"七牛云", "Go语言", "语音输入法"},
+		},
+		LLM: LLMConfig{
+			Enabled: false,
+			Mode:    "conservative",
 		},
 		UI: UIConfig{
 			AutoCopy: true,

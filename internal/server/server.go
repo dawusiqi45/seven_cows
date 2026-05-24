@@ -9,6 +9,7 @@ import (
 	"github.com/dawusiqi45/seven_cows/internal/asr"
 	"github.com/dawusiqi45/seven_cows/internal/config"
 	"github.com/dawusiqi45/seven_cows/internal/history"
+	"github.com/dawusiqi45/seven_cows/internal/llm"
 	"github.com/dawusiqi45/seven_cows/internal/textproc"
 	"go.uber.org/zap"
 )
@@ -29,6 +30,7 @@ type Dependencies struct {
 	History     HistoryStore
 	Processor   *textproc.Processor
 	Recognizer  asr.Recognizer
+	Optimizer   llm.Optimizer
 	StaticDir   string
 	Logger      *zap.Logger
 }
@@ -39,6 +41,7 @@ type App struct {
 	history     HistoryStore
 	processor   *textproc.Processor
 	recognizer  asr.Recognizer
+	optimizer   llm.Optimizer
 	staticDir   string
 	logger      *zap.Logger
 }
@@ -50,6 +53,7 @@ func New(deps Dependencies) *App {
 		history:     deps.History,
 		processor:   deps.Processor,
 		recognizer:  deps.Recognizer,
+		optimizer:   deps.Optimizer,
 		staticDir:   deps.StaticDir,
 		logger:      deps.Logger,
 	}
@@ -75,6 +79,11 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"ok":        true,
 		"timestamp": time.Now(),
 		"provider":  a.config.ASR.Provider,
+		"llm": map[string]any{
+			"enabled":  a.config.LLM.Enabled,
+			"provider": a.optimizer.Provider(),
+			"mode":     a.config.LLM.Mode,
+		},
 	})
 }
 
@@ -103,6 +112,8 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 			zap.Bool("auto_punctuation", next.Text.AutoPunctuation),
 			zap.Bool("remove_fillers", next.Text.RemoveFillers),
 			zap.Bool("enable_commands", next.Text.EnableCommands),
+			zap.Bool("llm_enabled", next.LLM.Enabled),
+			zap.String("llm_mode", next.LLM.Mode),
 		)
 		writeJSON(w, http.StatusOK, next)
 	default:
@@ -184,25 +195,57 @@ func (a *App) handleRecognize(w http.ResponseWriter, r *http.Request) {
 		zap.String("content_type", r.Header.Get("Content-Type")),
 	)
 
-	finalText := a.processor.Process(result.Text)
+	processedText := a.processor.Process(result.Text)
+	finalText := processedText
+	optimizerProvider := ""
+	if a.config.LLM.Enabled {
+		optimizeStarted := time.Now()
+		optimized, optimizeErr := a.optimizer.Optimize(r.Context(), llm.Input{
+			Text: processedText,
+			Mode: a.config.LLM.Mode,
+		})
+		if optimizeErr != nil {
+			a.logger.Warn("text optimization failed",
+				zap.Duration("duration", time.Since(optimizeStarted)),
+				zap.String("optimizer", a.optimizer.Provider()),
+				zap.Error(optimizeErr),
+			)
+		} else if !optimized.Skipped && strings.TrimSpace(optimized.Text) != "" {
+			finalText = optimized.Text
+			optimizerProvider = optimized.Provider
+			a.logger.Info("text optimization completed",
+				zap.String("optimizer", optimized.Provider),
+				zap.String("model", optimized.Model),
+				zap.Duration("duration", time.Since(optimizeStarted)),
+			)
+		}
+	}
 	entry := history.Entry{
-		ID:         time.Now().Format("20060102150405.000000000"),
-		RawText:    result.Text,
-		FinalText:  finalText,
-		Provider:   result.Provider,
-		Confidence: result.Confidence,
-		CreatedAt:  time.Now(),
+		ID:                time.Now().Format("20060102150405.000000000"),
+		RawText:           result.Text,
+		ProcessedText:     processedText,
+		FinalText:         finalText,
+		Provider:          result.Provider,
+		OptimizerProvider: optimizerProvider,
+		Confidence:        result.Confidence,
+		CreatedAt:         time.Now(),
+	}
+	if optimizerProvider != "" {
+		entry.OptimizedText = finalText
 	}
 	if err := a.history.Add(entry); err != nil {
 		a.logger.Warn("save history failed", zap.Error(err))
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"rawText":    result.Text,
-		"finalText":  finalText,
-		"provider":   result.Provider,
-		"confidence": result.Confidence,
-		"requestId":  result.RequestID,
+		"rawText":       result.Text,
+		"processedText": processedText,
+		"finalText":     finalText,
+		"optimized":     optimizerProvider != "",
+		"optimizer":     optimizerProvider,
+		"provider":      result.Provider,
+		"confidence":    result.Confidence,
+		"requestId":     result.RequestID,
 	})
 }
 

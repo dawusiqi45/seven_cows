@@ -10,6 +10,7 @@
 - Go 后端统一 ASR 接口。
 - Mock 语音识别实现，便于无第三方服务时验证完整链路。
 - 腾讯云一句话识别适配器。
+- GLM 智能文本优化，用于语音识别结果纠错和整理。
 - 文本处理：清理语气词、口令转换、自动补句号。
 - 历史记录：本地保存最近 100 条识别结果。
 - 设置项：自动标点、清理语气词、启用口令。
@@ -57,13 +58,30 @@ D:\prosoft\package\goproject\LanguageInput\seven_cows\voiceinput.local.json
     "region": "ap-shanghai",
     "engine": "16k_zh",
     "hotwords": ""
+  },
+  "llm": {
+    "provider": "glm",
+    "apiKey": "****",
+    "model": "glm-5",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    "timeoutSeconds": 10
   }
 }
 ```
 
-实际运行时只需要把 `secretId` 和 `secretKey` 的 `****` 改成腾讯云真实密钥。提交代码前请确认这两个字段已经恢复为 `****`，避免泄露密钥。需要切回 mock 模式时，把 `asrProvider` 改为 `mock` 即可。
+实际运行时只需要把 `secretId`、`secretKey` 和 `llm.apiKey` 的 `****` 改成真实密钥。提交代码前请确认这些字段已经恢复为 `****`，避免泄露密钥。需要切回 mock 模式时，把 `asrProvider` 改为 `mock` 即可。
 
 前端会把浏览器麦克风音频编码成 16kHz 单声道 WAV 后提交给 Go 后端，后端再调用腾讯云 ASR。
+
+## 智能优化
+
+智能优化是语音识别后的文本后处理。流程为：
+
+```text
+录音 -> 腾讯云 ASR -> 本地文本处理 -> GLM 文本优化 -> 展示结果
+```
+
+GLM 只用于修正错别字、同音字、标点和断句问题，不负责语音识别本身。页面右侧“智能优化”开关开启后，后端会在识别成功后调用 GLM；如果未配置 `llm.apiKey` 或调用失败，则自动保留普通识别结果。
 
 ## 测试
 
@@ -82,6 +100,7 @@ cmd/voiceinput       应用入口
 internal/asr         语音识别接口与 mock 实现
 internal/config      配置读写
 internal/history     历史记录存储
+internal/llm         GLM 文本优化接口
 internal/logging     zap 日志初始化
 internal/server      HTTP API 与静态页面服务
 internal/textproc    文本处理
@@ -93,12 +112,13 @@ docs                 需求与计划文档
 
 - `go.uber.org/zap`：结构化日志，记录服务启动、HTTP 请求、识别调用、错误信息和耗时。
 
-腾讯云 ASR 通过 HTTP API 和 TC3-HMAC-SHA256 签名直接调用，未引入腾讯云 SDK。
+腾讯云 ASR 通过 HTTP API 和 TC3-HMAC-SHA256 签名直接调用，未引入腾讯云 SDK。GLM 文本优化通过 HTTP API 调用。
 
 ## 原创功能部分
 
 - Go 后端服务与 API 路由。
 - ASR 抽象接口、mock 识别器、腾讯云 ASR 适配器。
+- GLM 智能文本优化器。
 - 文本清洗、口令转换、自动标点处理。
 - 本地 JSON 配置与历史记录。
 - 基于 zap 的结构化日志记录。

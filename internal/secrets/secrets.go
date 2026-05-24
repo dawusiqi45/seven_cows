@@ -10,6 +10,7 @@ import (
 type Config struct {
 	ASRProvider  string       `json:"asrProvider"`
 	TencentCloud TencentCloud `json:"tencentCloud"`
+	LLM          LLM          `json:"llm"`
 }
 
 type TencentCloud struct {
@@ -18,6 +19,14 @@ type TencentCloud struct {
 	Region    string `json:"region"`
 	Engine    string `json:"engine"`
 	Hotwords  string `json:"hotwords"`
+}
+
+type LLM struct {
+	Provider       string `json:"provider"`
+	APIKey         string `json:"apiKey"`
+	Model          string `json:"model"`
+	BaseURL        string `json:"baseUrl"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
 }
 
 func Load(path string) (Config, error) {

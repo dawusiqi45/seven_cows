@@ -15,6 +15,7 @@ import (
 	"github.com/dawusiqi45/seven_cows/internal/asr"
 	"github.com/dawusiqi45/seven_cows/internal/config"
 	"github.com/dawusiqi45/seven_cows/internal/history"
+	"github.com/dawusiqi45/seven_cows/internal/llm"
 	"github.com/dawusiqi45/seven_cows/internal/logging"
 	"github.com/dawusiqi45/seven_cows/internal/secrets"
 	"github.com/dawusiqi45/seven_cows/internal/server"
@@ -59,7 +60,11 @@ func main() {
 		logger.Error("load local secrets failed", zap.String("path", *secretsFile), zap.Error(err))
 		os.Exit(1)
 	}
-	logger.Info("local secrets checked", zap.String("path", *secretsFile), zap.Bool("tencent_configured", hasTencentCredentials(localSecrets)))
+	logger.Info("local secrets checked",
+		zap.String("path", *secretsFile),
+		zap.Bool("tencent_configured", hasTencentCredentials(localSecrets)),
+		zap.Bool("glm_configured", hasGLMCredentials(localSecrets)),
+	)
 
 	historyStore := history.NewJSONStore(*dataDir + string(os.PathSeparator) + "history.json")
 	processor := textproc.NewProcessor(appConfig.Text)
@@ -69,6 +74,12 @@ func main() {
 		os.Exit(1)
 	}
 	appConfig.ASR.Provider = provider
+	optimizer, optimizerProvider, err := buildOptimizer(localSecrets, logger)
+	if err != nil {
+		logger.Error("create optimizer failed", zap.Error(err))
+		os.Exit(1)
+	}
+	logger.Info("text optimizer selected", zap.String("provider", optimizerProvider), zap.Bool("enabled", appConfig.LLM.Enabled))
 
 	app := server.New(server.Dependencies{
 		Config:      appConfig,
@@ -76,6 +87,7 @@ func main() {
 		History:     historyStore,
 		Processor:   processor,
 		Recognizer:  recognizer,
+		Optimizer:   optimizer,
 		StaticDir:   *staticDir,
 		Logger:      logger,
 	})
@@ -156,10 +168,50 @@ func hasTencentCredentials(localSecrets secrets.Config) bool {
 		secrets.First(os.Getenv("TENCENTCLOUD_SECRET_KEY"), localSecrets.TencentCloud.SecretKey) != ""
 }
 
+func hasGLMCredentials(localSecrets secrets.Config) bool {
+	return secrets.First(os.Getenv("GLM_API_KEY"), localSecrets.LLM.APIKey) != ""
+}
+
+func buildOptimizer(localSecrets secrets.Config, logger *zap.Logger) (llm.Optimizer, string, error) {
+	provider := secrets.First(os.Getenv("VOICEINPUT_LLM_PROVIDER"), localSecrets.LLM.Provider)
+	if provider == "" {
+		provider = "glm"
+	}
+
+	switch strings.ToLower(provider) {
+	case "glm":
+		if !hasGLMCredentials(localSecrets) {
+			logger.Warn("glm optimizer enabled but api key is not configured, falling back to no optimization")
+			return llm.NewNoopOptimizer("missing_glm_key"), "missing_glm_key", nil
+		}
+		optimizer, err := llm.NewGLMOptimizer(llm.GLMConfig{
+			APIKey:         secrets.First(os.Getenv("GLM_API_KEY"), localSecrets.LLM.APIKey),
+			Model:          firstDefault("glm-5", os.Getenv("GLM_MODEL"), localSecrets.LLM.Model),
+			BaseURL:        firstDefault("https://open.bigmodel.cn/api/paas/v4/chat/completions", os.Getenv("GLM_BASE_URL"), localSecrets.LLM.BaseURL),
+			TimeoutSeconds: firstPositive(localSecrets.LLM.TimeoutSeconds, 10),
+		}, logger)
+		if err != nil {
+			return nil, "", err
+		}
+		return optimizer, "glm", nil
+	case "mock", "none", "disabled":
+		return llm.NewNoopOptimizer(provider), provider, nil
+	default:
+		return nil, "", fmt.Errorf("unsupported llm provider: %s", provider)
+	}
+}
+
 func firstDefault(fallback string, values ...string) string {
 	value := secrets.First(values...)
 	if value == "" {
 		return fallback
 	}
 	return value
+}
+
+func firstPositive(value int, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
