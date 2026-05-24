@@ -9,6 +9,7 @@ import (
 	"github.com/dawusiqi45/seven_cows/internal/asr"
 	"github.com/dawusiqi45/seven_cows/internal/config"
 	"github.com/dawusiqi45/seven_cows/internal/history"
+	"github.com/dawusiqi45/seven_cows/internal/llm"
 	"github.com/dawusiqi45/seven_cows/internal/textproc"
 	"go.uber.org/zap"
 )
@@ -29,6 +30,7 @@ type Dependencies struct {
 	History     HistoryStore
 	Processor   *textproc.Processor
 	Recognizer  asr.Recognizer
+	Optimizer   llm.Optimizer
 	StaticDir   string
 	Logger      *zap.Logger
 }
@@ -39,6 +41,7 @@ type App struct {
 	history     HistoryStore
 	processor   *textproc.Processor
 	recognizer  asr.Recognizer
+	optimizer   llm.Optimizer
 	staticDir   string
 	logger      *zap.Logger
 }
@@ -50,6 +53,7 @@ func New(deps Dependencies) *App {
 		history:     deps.History,
 		processor:   deps.Processor,
 		recognizer:  deps.Recognizer,
+		optimizer:   deps.Optimizer,
 		staticDir:   deps.StaticDir,
 		logger:      deps.Logger,
 	}
@@ -62,6 +66,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/config", a.handleConfig)
 	mux.HandleFunc("/api/history", a.handleHistory)
 	mux.HandleFunc("/api/process", a.handleProcess)
+	mux.HandleFunc("/api/optimize", a.handleOptimize)
 	mux.HandleFunc("/api/recognize", a.handleRecognize)
 	return withRequestLogging(withJSONErrors(mux, a.logger), a.logger)
 }
@@ -75,6 +80,10 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"ok":        true,
 		"timestamp": time.Now(),
 		"provider":  a.config.ASR.Provider,
+		"llm": map[string]any{
+			"provider": a.optimizer.Provider(),
+			"mode":     a.config.LLM.Mode,
+		},
 	})
 }
 
@@ -103,6 +112,7 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 			zap.Bool("auto_punctuation", next.Text.AutoPunctuation),
 			zap.Bool("remove_fillers", next.Text.RemoveFillers),
 			zap.Bool("enable_commands", next.Text.EnableCommands),
+			zap.String("llm_mode", next.LLM.Mode),
 		)
 		writeJSON(w, http.StatusOK, next)
 	default:
@@ -151,6 +161,62 @@ func (a *App) handleProcess(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *App) handleOptimize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	originalText := strings.TrimSpace(req.Text)
+	if originalText == "" {
+		http.Error(w, "text is empty", http.StatusBadRequest)
+		return
+	}
+
+	processedText := a.processor.Process(originalText)
+	finalText := processedText
+	optimizerProvider := ""
+	optimizeStarted := time.Now()
+	optimized, optimizeErr := a.optimizer.Optimize(r.Context(), llm.Input{
+		Text: processedText,
+		Mode: a.config.LLM.Mode,
+	})
+	if optimizeErr != nil {
+		a.logger.Warn("manual text optimization failed",
+			zap.Duration("duration", time.Since(optimizeStarted)),
+			zap.String("optimizer", a.optimizer.Provider()),
+			zap.Error(optimizeErr),
+		)
+		http.Error(w, "智能优化调用失败，请稍后重试或检查 GLM 配置", http.StatusBadGateway)
+		return
+	} else if !optimized.Skipped && strings.TrimSpace(optimized.Text) != "" {
+		finalText = optimized.Text
+		optimizerProvider = optimized.Provider
+		a.logger.Info("manual text optimization completed",
+			zap.String("optimizer", optimized.Provider),
+			zap.String("model", optimized.Model),
+			zap.Duration("duration", time.Since(optimizeStarted)),
+		)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"originalText":   originalText,
+		"processedText":  processedText,
+		"finalText":      finalText,
+		"optimized":      optimizerProvider != "",
+		"optimizer":      optimizerProvider,
+		"optimizerState": a.optimizer.Provider(),
+	})
+}
+
 func (a *App) handleRecognize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -184,25 +250,30 @@ func (a *App) handleRecognize(w http.ResponseWriter, r *http.Request) {
 		zap.String("content_type", r.Header.Get("Content-Type")),
 	)
 
-	finalText := a.processor.Process(result.Text)
+	processedText := a.processor.Process(result.Text)
+	finalText := processedText
 	entry := history.Entry{
-		ID:         time.Now().Format("20060102150405.000000000"),
-		RawText:    result.Text,
-		FinalText:  finalText,
-		Provider:   result.Provider,
-		Confidence: result.Confidence,
-		CreatedAt:  time.Now(),
+		ID:            time.Now().Format("20060102150405.000000000"),
+		RawText:       result.Text,
+		ProcessedText: processedText,
+		FinalText:     finalText,
+		Provider:      result.Provider,
+		Confidence:    result.Confidence,
+		CreatedAt:     time.Now(),
 	}
 	if err := a.history.Add(entry); err != nil {
 		a.logger.Warn("save history failed", zap.Error(err))
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"rawText":    result.Text,
-		"finalText":  finalText,
-		"provider":   result.Provider,
-		"confidence": result.Confidence,
-		"requestId":  result.RequestID,
+		"rawText":       result.Text,
+		"processedText": processedText,
+		"finalText":     finalText,
+		"optimized":     false,
+		"optimizer":     "",
+		"provider":      result.Provider,
+		"confidence":    result.Confidence,
+		"requestId":     result.RequestID,
 	})
 }
 

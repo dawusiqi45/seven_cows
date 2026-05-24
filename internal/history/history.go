@@ -10,12 +10,15 @@ import (
 )
 
 type Entry struct {
-	ID         string    `json:"id"`
-	RawText    string    `json:"rawText"`
-	FinalText  string    `json:"finalText"`
-	Provider   string    `json:"provider"`
-	Confidence float64   `json:"confidence"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID                string    `json:"id"`
+	RawText           string    `json:"rawText"`
+	ProcessedText     string    `json:"processedText,omitempty"`
+	OptimizedText     string    `json:"optimizedText,omitempty"`
+	FinalText         string    `json:"finalText"`
+	Provider          string    `json:"provider"`
+	OptimizerProvider string    `json:"optimizerProvider,omitempty"`
+	Confidence        float64   `json:"confidence"`
+	CreatedAt         time.Time `json:"createdAt"`
 }
 
 type JSONStore struct {

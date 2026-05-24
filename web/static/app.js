@@ -21,6 +21,7 @@ const recordButtonText = document.querySelector("#recordButtonText");
 const resultText = document.querySelector("#resultText");
 const resultMeta = document.querySelector("#resultMeta");
 const processButton = document.querySelector("#processButton");
+const optimizeButton = document.querySelector("#optimizeButton");
 const copyButton = document.querySelector("#copyButton");
 const clearButton = document.querySelector("#clearButton");
 const historyList = document.querySelector("#historyList");
@@ -64,6 +65,7 @@ function setBusy(isBusy) {
   state.processing = isBusy;
   recordButton.disabled = isBusy;
   processButton.disabled = isBusy;
+  optimizeButton.disabled = isBusy;
   copyButton.disabled = isBusy;
   clearButton.disabled = isBusy;
   saveSettingsButton.disabled = isBusy;
@@ -87,11 +89,13 @@ async function api(path, options = {}) {
 async function loadHealth() {
   const health = await api("/api/health");
   state.provider = health.provider || "unknown";
-  providerBadge.textContent = `识别服务：${state.provider}`;
+  const llmText = health.llm?.provider ? ` · 优化：${health.llm.provider}` : "";
+  providerBadge.textContent = `识别服务：${state.provider}${llmText}`;
 }
 
 async function loadConfig() {
   state.config = await api("/api/config");
+  state.config.llm = state.config.llm || { mode: "conservative" };
   inputs.autoPunctuation.checked = state.config.text.autoPunctuation;
   inputs.removeFillers.checked = state.config.text.removeFillers;
   inputs.enableCommands.checked = state.config.text.enableCommands;
@@ -99,14 +103,17 @@ async function loadConfig() {
 
 async function saveConfig() {
   try {
+    state.config.llm = state.config.llm || { mode: "conservative" };
     state.config.text.autoPunctuation = inputs.autoPunctuation.checked;
     state.config.text.removeFillers = inputs.removeFillers.checked;
     state.config.text.enableCommands = inputs.enableCommands.checked;
+    state.config.llm.mode = state.config.llm.mode || "conservative";
     await api("/api/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(state.config),
     });
+    await loadHealth();
     setStatus("设置已保存");
     showMessage("文本处理设置已保存。");
   } catch (error) {
@@ -128,7 +135,7 @@ async function loadHistory() {
     item.className = "history-item";
     item.type = "button";
     item.innerHTML = `
-      <time>${new Date(entry.createdAt).toLocaleString()} · ${escapeHTML(entry.provider || "unknown")}</time>
+      <time>${new Date(entry.createdAt).toLocaleString()} · ${escapeHTML(entry.provider || "unknown")}${entry.optimizerProvider ? ` · ${escapeHTML(entry.optimizerProvider)}` : ""}</time>
       <div class="history-text">${escapeHTML(entry.finalText || "")}</div>
     `;
     item.addEventListener("click", () => {
@@ -230,7 +237,7 @@ async function submitRecording(blob) {
     }
     const duration = Math.round(performance.now() - startedAt);
     setStatus("识别完成");
-    showMessage(`识别完成，服务：${result.provider || state.provider}，耗时 ${duration}ms。`);
+    showMessage(`识别完成，服务：${result.provider || state.provider}，耗时 ${duration}ms。可点击“智能优化”进一步整理文本。`);
     await loadHistory();
   } catch (error) {
     setStatus("识别失败", "error");
@@ -259,6 +266,37 @@ async function processCurrentText() {
   } catch (error) {
     setStatus("处理失败", "error");
     showMessage(`文本处理失败：${error.message}`, "error");
+  }
+}
+
+async function optimizeCurrentText() {
+  if (!resultText.value.trim()) {
+    showMessage("当前没有可优化的文本。", "error");
+    return;
+  }
+  setBusy(true);
+  const startedAt = performance.now();
+  try {
+    const result = await api("/api/optimize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: resultText.value }),
+    });
+    resultText.value = result.finalText || "";
+    updateResultMeta();
+    const duration = Math.round(performance.now() - startedAt);
+    if (result.optimized) {
+      setStatus("智能优化完成");
+      showMessage(`已通过 ${result.optimizer} 优化当前文本，耗时 ${duration}ms。`);
+    } else {
+      setStatus("已处理文本");
+      showMessage(`未调用大模型，已使用本地规则处理文本。当前优化器状态：${result.optimizerState}。`);
+    }
+  } catch (error) {
+    setStatus("优化失败", "error");
+    showMessage(`智能优化失败：${error.message}`, "error");
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -442,6 +480,7 @@ async function toggleRecording() {
 
 recordButton.addEventListener("click", toggleRecording);
 processButton.addEventListener("click", processCurrentText);
+optimizeButton.addEventListener("click", optimizeCurrentText);
 copyButton.addEventListener("click", copyCurrentText);
 clearButton.addEventListener("click", clearResult);
 clearHistoryButton.addEventListener("click", clearHistory);
