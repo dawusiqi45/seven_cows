@@ -44,7 +44,7 @@ go run ./cmd/voiceinput -log-file data/logs/dev.log
 默认使用 `mock` 识别器，便于无密钥时验证完整流程。接入腾讯云一句话识别时，直接修改项目根目录下的配置文件：
 
 ```text
-D:\prosoft\package\goproject\LanguageInput\seven_cows\voiceinput.local.json
+voiceinput.local.json
 ```
 
 配置文件随项目提交到 GitHub，但敏感字段使用 `****` 脱敏：
