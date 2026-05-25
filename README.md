@@ -89,9 +89,8 @@ GLM 只用于修正错别字、同音字、标点、断句和口语化表达，�
 go test ./...
 ```
 
-## 演示说明
+## DEMO演示说明
 
-演示步骤见 [docs/demo-guide.md](docs/demo-guide.md)。
 
 演示视频：[Bilibili Demo](https://www.bilibili.com/video/BV1wiG462EMh/)。
 
