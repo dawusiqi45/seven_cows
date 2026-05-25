@@ -93,6 +93,8 @@ go test ./...
 
 演示步骤见 [docs/demo-guide.md](docs/demo-guide.md)。
 
+演示视频：[Bilibili Demo](https://www.bilibili.com/video/BV1wiG462EMh/)。
+
 ## 项目结构
 
 ```text
@@ -114,6 +116,8 @@ docs                 需求与计划文档
 
 腾讯云 ASR 通过 HTTP API 和 TC3-HMAC-SHA256 签名直接调用，未引入腾讯云 SDK。GLM 文本优化通过 HTTP API 调用。
 
+本项目演示阶段使用腾讯云 ASR 和智谱 GLM 服务的免费额度完成接口调用，不涉及额外付费部署。
+
 ## 原创功能部分
 
 - Go 后端服务与 API 路由。
@@ -123,9 +127,3 @@ docs                 需求与计划文档
 - 本地 JSON 配置与历史记录。
 - 基于 zap 的结构化日志记录。
 - Web 录音控制台和浏览器端 WAV 编码。
-
-## 后续扩展
-
-- 增加全局快捷键和托盘程序。
-- 增加 Windows SendInput 上屏能力。
-- 长期版本可研究 Windows TSF，实现真正系统级输入法。
